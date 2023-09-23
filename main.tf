@@ -1,76 +1,123 @@
-provider "aws" {
-  version = "~> 2.0"
-  alias = "virginia"
-  region = "us-east-1"
-}
-
 /* ======= Steps ======= */
 
 /* 1. Create bucket for storing static website files */
 resource "aws_s3_bucket" "bucket" {
-  bucket = var.bucket_name
-  acl    = "public-read"
-  policy = <<POLICY
-{
-	"Version": "2012-10-17",
-	"Statement": [
-		{
-			"Sid": "PublicReadGetObject",
-			"Effect": "Allow",
-			"Principal": "*",
-			"Action": "s3:GetObject",
-			"Resource": "arn:aws:s3:::${var.bucket_name}/*"
-		}
-	]
+  bucket        = var.bucket_name
+  force_destroy = true
 }
-POLICY
-  website {
-    index_document = var.index_document
-    error_document = var.error_document
+
+resource "aws_s3_bucket_public_access_block" "access_block" {
+  bucket = aws_s3_bucket.bucket.id
+
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+resource "aws_s3_bucket_ownership_controls" "acl_ownership" {
+  depends_on = [aws_s3_bucket_public_access_block.access_block]
+  bucket     = aws_s3_bucket.bucket.id
+  rule {
+    object_ownership = "BucketOwnerPreferred"
   }
-
-  tags = var.tags
 }
 
+resource "aws_s3_bucket_acl" "acl" {
+  depends_on = [aws_s3_bucket_public_access_block.access_block]
+  bucket     = aws_s3_bucket.bucket.id
+  acl        = "public-read"
+}
+
+resource "aws_s3_bucket_policy" "permissions" {
+  depends_on = [aws_s3_bucket_public_access_block.access_block]
+  bucket     = aws_s3_bucket.bucket.id
+  policy     = data.aws_iam_policy_document.permissions.json
+}
+
+data "aws_iam_policy_document" "permissions" {
+  version = "2012-10-17"
+  statement {
+    sid    = "PublicReadGetObject"
+    effect = "Allow"
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    actions   = ["s3:GetObject"]
+    resources = ["arn:aws:s3:::${var.bucket_name}/*"]
+  }
+  statement {
+    sid    = "OwnerManageBucket"
+    effect = "Allow"
+    principals {
+      type        = "AWS"
+      identifiers = toset(var.bucket_owners)
+    }
+    actions = ["s3:*"]
+    resources = [
+      "arn:aws:s3:::${var.bucket_name}",
+      "arn:aws:s3:::${var.bucket_name}/*"
+    ]
+  }
+}
+
+resource "aws_s3_bucket_website_configuration" "bucket_website" {
+  depends_on = [aws_s3_bucket_public_access_block.access_block]
+  bucket     = aws_s3_bucket.bucket.id
+  index_document {
+    suffix = "index.html"
+  }
+  error_document {
+    key = "error.html"
+  }
+}
 
 /* 2. Provision ACM certificate to verify domains */
+provider "aws" {
+  alias  = "useast1"
+  region = "us-east-1"
+}
+
 resource "aws_acm_certificate" "cert" {
-  provider = aws.virginia
-  domain_name = var.domain_name
+  provider          = aws.useast1
+  domain_name       = var.domain_name
   validation_method = "DNS"
 
   lifecycle {
     create_before_destroy = true
   }
-  
-	tags = var.tags
+
+  tags = var.tags
 }
 
+locals {
+  aws_acm_cert_validation = tolist(aws_acm_certificate.cert.domain_validation_options)
+}
 
 /* 3. Provision ACM validation record via cloudflare */
 resource "cloudflare_record" "acm" {
   depends_on = [aws_acm_certificate.cert]
 
   zone_id = var.cloudflare_zone_id
-  name    = aws_acm_certificate.cert.domain_validation_options.0.resource_record_name
-  value   = aws_acm_certificate.cert.domain_validation_options.0.resource_record_value
-  type    = aws_acm_certificate.cert.domain_validation_options.0.resource_record_type
+  name    = local.aws_acm_cert_validation.0.resource_record_name
+  value   = local.aws_acm_cert_validation.0.resource_record_value
+  type    = local.aws_acm_cert_validation.0.resource_record_type
 }
 
 /* 3. ACM Validation after adding DNS record */
 resource "aws_acm_certificate_validation" "cert" {
-  provider = aws.virginia
-  depends_on = [aws_acm_certificate.cert]
-
+  depends_on      = [aws_acm_certificate.cert, cloudflare_record.acm]
+  provider        = aws.useast1
   certificate_arn = aws_acm_certificate.cert.arn
 }
 
 /* 4. Provision cloudfront distribution infront of S3 bucket */
 resource "aws_cloudfront_distribution" "dist" {
-  depends_on = [aws_s3_bucket.bucket, aws_acm_certificate_validation.cert]
+  depends_on = [aws_s3_bucket.bucket, aws_acm_certificate_validation.cert, aws_s3_bucket_website_configuration.bucket_website, aws_s3_bucket_acl.acl]
 
   origin {
-    domain_name = aws_s3_bucket.bucket.website_endpoint
+    domain_name = aws_s3_bucket.bucket.bucket_domain_name
     origin_id   = "S3-${var.bucket_name}"
   }
 
@@ -107,10 +154,10 @@ resource "aws_cloudfront_distribution" "dist" {
 
   viewer_certificate {
     acm_certificate_arn = aws_acm_certificate_validation.cert.certificate_arn
-    ssl_support_method = "sni-only"
+    ssl_support_method  = "sni-only"
   }
 
-	tags = var.tags
+  tags = var.tags
 }
 
 /* 5. Add CNAME record to Cloudflare DNS which points to the newly created cloudfront distribution */
@@ -120,5 +167,15 @@ resource "cloudflare_record" "cname" {
   zone_id = var.cloudflare_zone_id
   name    = var.domain_name
   value   = aws_cloudfront_distribution.dist.domain_name
+  type    = "CNAME"
+}
+
+resource "cloudflare_record" "subdomains" {
+  depends_on = [aws_cloudfront_distribution.dist]
+  for_each   = toset(var.subdomains)
+
+  zone_id = var.cloudflare_zone_id
+  name    = each.value
+  value   = var.domain_name
   type    = "CNAME"
 }
