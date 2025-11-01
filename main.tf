@@ -111,6 +111,7 @@ resource "cloudflare_dns_record" "acm" {
   name    = local.aws_acm_cert_validation.0.resource_record_name
   content = local.aws_acm_cert_validation.0.resource_record_value
   type    = local.aws_acm_cert_validation.0.resource_record_type
+  ttl     = 1 # Automatic TTL management by Cloudflare
 }
 
 /* 3. ACM Validation after adding DNS record */
@@ -199,6 +200,7 @@ resource "cloudflare_dns_record" "cname" {
   name    = var.domain_name
   content = aws_cloudfront_distribution.dist.domain_name
   type    = "CNAME"
+  ttl     = 1 # Automatic TTL management by Cloudflare
 }
 
 resource "cloudflare_dns_record" "subdomains" {
@@ -209,4 +211,5 @@ resource "cloudflare_dns_record" "subdomains" {
   name    = each.value
   content = var.domain_name
   type    = "CNAME"
+  ttl     = 1 # Automatic TTL management by Cloudflare
 }
