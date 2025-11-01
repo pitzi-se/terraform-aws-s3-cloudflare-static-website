@@ -1,55 +1,90 @@
-# Static Website (S3, CloudFront & Cloudflare) 
-This terraform module provisions the appropriate AWS & CloudFlare resources allowing you to deploy a static website using S3 (static file storage), CloudFront (CDN) & CloudFlare (DNS Management).
+# Static Website (S3, CloudFront & Cloudflare)
+This terraform module provisions the appropriate AWS & CloudFlare resources allowing you to deploy a secure static website using S3 (static file storage), CloudFront (CDN) & CloudFlare (DNS Management).
 
-This module should be used inconjuction with your prefered continuous integration service (CircleCI, Github Actions etc). You can use this module to provision the required resources and should rely on your CI process to build and sync to S3. 
+This module implements security best practices including:
+- Private S3 bucket with CloudFront Origin Access Control (OAC)
+- HTTPS-only access with modern TLS 1.2+
+- Restricted HTTP methods (GET/HEAD/OPTIONS only)
+- Custom error page handling
+
+This module should be used in conjunction with your preferred continuous integration service (CircleCI, GitHub Actions etc). You can use this module to provision the required resources and should rely on your CI process to build and sync to S3.
 
 ## What it does
-**Step 1**: Create a S3 bucket used to store static website files.
+**Step 1**: Create a private S3 bucket used to store static website files.
 
-**Step 2**: Provision an ACM certificate to verify you domain.
+**Step 2**: Provision an ACM certificate to verify your domain.
 
-**Step 3**: Provision ACM validation record via cloudflare. This is so that ACM can validate you own the domain you specified.
+**Step 3**: Provision ACM validation record via Cloudflare. This is so that ACM can validate you own the domain you specified.
 
 **Step 4**: Test ACM Validation after adding DNS validation record.
 
-**Step 5**: Provision cloudfront distribution to serve you files out of the S3 bucket.
+**Step 5**: Create CloudFront Origin Access Control (OAC) for secure S3 access.
 
-**Step 6**: Add CNAME record to Cloudflare DNS which points to the newly created cloudfront distribution.
+**Step 6**: Provision CloudFront distribution to serve your files out of the S3 bucket with HTTPS enforcement and security headers.
+
+**Step 7**: Add CNAME record to Cloudflare DNS which points to the newly created CloudFront distribution.
 
 ## Example Usage
 ```terraform
+terraform {
+  required_version = ">= 1.5.7"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "~> 5.12"
+    }
+  }
+}
+
 provider "aws" {
-  version = "~> 2.0"
-  region = "us-east-2"
-  access_key = "ASYDD3ABRDVP34UaDSFX4"
-  secret_key = "FQhwfbErYFSFD3fdsDF67gpZXcUVycRYRTPHha"
+  region = "us-east-1"  # Or your preferred region
 }
 
 provider "cloudflare" {
-  version   = "~> 2.0"
-  api_token = "C6Z1Da-yp9Cdshj0ymaHZvK0ujmWnEAELehi0KlL"
+  api_token = var.cloudflare_api_token  # Use variables for secrets
 }
 
 module "static-web-hosting" {
-  source = "cjoy/s3-cloudflare-static-website/aws"
+  source = "github.com/pitzi-se/terraform-aws-s3-cloudflare-static-website?ref=v1.0.0"
 
-  bucket_name = "example-website-bucket"
-  index_document = "index.html"
-  error_document =  "error.html"
-  domain_name = "example.com"
-  cloudflare_zone_id = "4ab79b65343sdf44dca2943d2345d9dbf0d"
-} 
+  region             = "us-east-1"
+  bucket_name        = "example-website-bucket"
+  index_document     = "index.html"
+  error_document     = "error.html"
+  domain_name        = "example.com"
+  cloudflare_zone_id = var.cloudflare_zone_id
+  subdomains         = ["www"]
+  bucket_owners      = ["arn:aws:iam::123456789012:role/my-ci-role"]
+}
+
+variable "cloudflare_api_token" {
+  description = "Cloudflare API token"
+  type        = string
+  sensitive   = true
+}
+
+variable "cloudflare_zone_id" {
+  description = "Cloudflare zone ID"
+  type        = string
+}
 ```
 
 ## Arguments
-| Argument | Type | Description |
-|----------|------|-------------|
-| **bucket_name** | `string` | This corresponds to a unique bucket name in which you want to store your site contents. It is normally convention to use the domain name as the bucket name (eg. example.com). |
-| **index_document** | `string` | This corresponds to the default index document. (Defaults to index.html) |
-| **error_document** | `string` | This corresponds to the default error document. (Defaults to error.html) |
-| **domain_name** | `string` | This is the domain name you want to use to point your website. (eg. example.com, www.example.com etc) |
-| **tags** | `map(string)` | Tags you would like to apply across AWS resources |
-| **cloudflare_zone_id** | `string` | The DNS zone ID in which add the record. You can get this from the domain view in the cloudflare dashboard. |
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| **bucket_name** | `string` | Yes | This corresponds to a unique bucket name in which you want to store your site contents. It is normally convention to use the domain name as the bucket name (eg. example.com). |
+| **domain_name** | `string` | Yes | This is the domain name you want to use to point your website. (eg. example.com, www.example.com etc) |
+| **cloudflare_zone_id** | `string` | Yes | The DNS zone ID in which to add the record. You can get this from the domain view in the cloudflare dashboard. |
+| **region** | `string` | Yes | The AWS region to create the S3 bucket in. |
+| **bucket_owners** | `list(string)` | Yes | The ARNs of the principals that should be bucket owners (e.g., CI/CD roles or IAM users). |
+| **index_document** | `string` | No | This corresponds to the default index document. (Defaults to index.html) |
+| **error_document** | `string` | No | This corresponds to the default error document. (Defaults to error.html) |
+| **subdomains** | `list(string)` | No | A list of subdomains to point to the same S3 website (e.g., ["www"]). |
+| **tags** | `map(string)` | No | Tags you would like to apply across AWS resources. |
 
 
 
@@ -198,8 +233,8 @@ Terraform will perform the following actions:
         }
     }
 
-  # cloudflare_record.acm will be created
-  + resource "cloudflare_record" "acm" {
+  # cloudflare_dns_record.acm will be created
+  + resource "cloudflare_dns_record" "acm" {
       + created_on  = (known after apply)
       + hostname    = (known after apply)
       + id          = (known after apply)
@@ -210,12 +245,12 @@ Terraform will perform the following actions:
       + proxied     = false
       + ttl         = (known after apply)
       + type        = (known after apply)
-      + value       = (known after apply)
+      + content     = (known after apply)
       + zone_id     = "4ab79b65343sdf44dca2943d2345d9dbf0d"
     }
 
-  # cloudflare_record.cname will be created
-  + resource "cloudflare_record" "cname" {
+  # cloudflare_dns_record.cname will be created
+  + resource "cloudflare_dns_record" "cname" {
       + created_on  = (known after apply)
       + hostname    = (known after apply)
       + id          = (known after apply)
@@ -226,7 +261,7 @@ Terraform will perform the following actions:
       + proxied     = false
       + ttl         = (known after apply)
       + type        = "CNAME"
-      + value       = (known after apply)
+      + content     = (known after apply)
       + zone_id     = "4ab79b65343sdf44dca2943d2345d9dbf0d"
     }
 
