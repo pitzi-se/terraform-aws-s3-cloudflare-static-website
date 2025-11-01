@@ -233,8 +233,8 @@ Terraform will perform the following actions:
         }
     }
 
-  # cloudflare_record.acm will be created
-  + resource "cloudflare_record" "acm" {
+  # cloudflare_dns_record.acm will be created
+  + resource "cloudflare_dns_record" "acm" {
       + created_on  = (known after apply)
       + hostname    = (known after apply)
       + id          = (known after apply)
@@ -245,12 +245,12 @@ Terraform will perform the following actions:
       + proxied     = false
       + ttl         = (known after apply)
       + type        = (known after apply)
-      + value       = (known after apply)
+      + content     = (known after apply)
       + zone_id     = "4ab79b65343sdf44dca2943d2345d9dbf0d"
     }
 
-  # cloudflare_record.cname will be created
-  + resource "cloudflare_record" "cname" {
+  # cloudflare_dns_record.cname will be created
+  + resource "cloudflare_dns_record" "cname" {
       + created_on  = (known after apply)
       + hostname    = (known after apply)
       + id          = (known after apply)
@@ -261,7 +261,7 @@ Terraform will perform the following actions:
       + proxied     = false
       + ttl         = (known after apply)
       + type        = "CNAME"
-      + value       = (known after apply)
+      + content     = (known after apply)
       + zone_id     = "4ab79b65343sdf44dca2943d2345d9dbf0d"
     }
 

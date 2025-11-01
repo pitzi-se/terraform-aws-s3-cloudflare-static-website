@@ -104,18 +104,18 @@ locals {
 }
 
 /* 3. Provision ACM validation record via cloudflare */
-resource "cloudflare_record" "acm" {
+resource "cloudflare_dns_record" "acm" {
   depends_on = [aws_acm_certificate.cert]
 
   zone_id = var.cloudflare_zone_id
   name    = local.aws_acm_cert_validation.0.resource_record_name
-  value   = local.aws_acm_cert_validation.0.resource_record_value
+  content = local.aws_acm_cert_validation.0.resource_record_value
   type    = local.aws_acm_cert_validation.0.resource_record_type
 }
 
 /* 3. ACM Validation after adding DNS record */
 resource "aws_acm_certificate_validation" "cert" {
-  depends_on      = [aws_acm_certificate.cert, cloudflare_record.acm]
+  depends_on      = [aws_acm_certificate.cert, cloudflare_dns_record.acm]
   provider        = aws.useast1
   certificate_arn = aws_acm_certificate.cert.arn
 }
@@ -192,21 +192,21 @@ resource "aws_cloudfront_distribution" "dist" {
 }
 
 /* 6. Add CNAME record to Cloudflare DNS which points to the newly created cloudfront distribution */
-resource "cloudflare_record" "cname" {
+resource "cloudflare_dns_record" "cname" {
   depends_on = [aws_cloudfront_distribution.dist]
 
   zone_id = var.cloudflare_zone_id
   name    = var.domain_name
-  value   = aws_cloudfront_distribution.dist.domain_name
+  content = aws_cloudfront_distribution.dist.domain_name
   type    = "CNAME"
 }
 
-resource "cloudflare_record" "subdomains" {
+resource "cloudflare_dns_record" "subdomains" {
   depends_on = [aws_cloudfront_distribution.dist]
   for_each   = toset(var.subdomains)
 
   zone_id = var.cloudflare_zone_id
   name    = each.value
-  value   = var.domain_name
+  content = var.domain_name
   type    = "CNAME"
 }
