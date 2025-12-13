@@ -212,4 +212,5 @@ resource "cloudflare_dns_record" "subdomains" {
   content = var.domain_name
   type    = "CNAME"
   ttl     = 1 # Automatic TTL management by Cloudflare
+  proxied = true
 }
