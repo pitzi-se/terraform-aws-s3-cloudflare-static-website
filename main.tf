@@ -108,8 +108,16 @@ resource "cloudflare_dns_record" "acm" {
   depends_on = [aws_acm_certificate.cert]
 
   zone_id = var.cloudflare_zone_id
-  name    = local.aws_acm_cert_validation.0.resource_record_name
-  content = local.aws_acm_cert_validation.0.resource_record_value
+
+  # ACM returns fully-qualified names with a trailing dot
+  # ("_abc.example.com."); Cloudflare stores and returns them without one.
+  # Passing AWS's value through verbatim therefore produces an in-place
+  # update on every single plan that apply can never settle: apply writes
+  # the dot, Cloudflare strips it, the next refresh sees a difference again.
+  # A trailing dot is semantically redundant here anyway, since the name is
+  # already absolute.
+  name    = trimsuffix(local.aws_acm_cert_validation.0.resource_record_name, ".")
+  content = trimsuffix(local.aws_acm_cert_validation.0.resource_record_value, ".")
   type    = local.aws_acm_cert_validation.0.resource_record_type
   ttl     = 1 # Automatic TTL management by Cloudflare
 }
